@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>💰 Controle de Finanças Pessoais — Versão Correção</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 20px; background:#f9f9f9; color:#333; }
+    h1 { text-align:center; color:#2c3e50; }
+    input, select, button { padding:8px; margin:5px 0; width:100%; border-radius:8px; border:1px solid #ccc; font-size:14px; box-sizing:border-box; }
+    button { background:#27ae60; color:#fff; font-weight:bold; cursor:pointer; }
+    button:hover { background:#2ecc71; }
+    .resumo { margin-top:20px; padding:15px; background:white; border-radius:12px; box-shadow:0 2px 6px rgba(0,0,0,0.08); }
+    .positivo{color:green;font-weight:bold} .negativo{color:red;font-weight:bold}
+    table{width:100%; border-collapse:collapse; background:white; margin-top:15px; border-radius:10px; overflow:hidden;}
+    th,td{border-bottom:1px solid #eee; padding:10px; text-align:left;}
+    th{background:#3498db;color:white;}
+    tr:hover{background:#f2f2f2}
+    .filtros{margin-top:20px; display:flex; gap:10px;}
+    canvas{margin-top:30px; background:white; border-radius:10px; padding:10px;}
+    .acoes { display:flex; gap:8px; }
+    .btn-excluir { background:#e74c3c; }
+  </style>
+</head>
+<body>
+  <h1>💰 Controle de Finanças</h1>
+
+  <!-- Formulário -->
+  <div>
+    <label>Descrição:</label>
+    <input id="descricao" type="text" placeholder="Ex: Supermercado">
+
+    <label>Tipo:</label>
+    <select id="tipo">
+      <option value="receita">Receita</option>
+      <option value="despesa" selected>Despesa</option>
+    </select>
+
+    <label>Categoria:</label>
+    <input id="categoria" type="text" placeholder="Ex: Alimentação, Salário...">
+
+    <label>Valor (R$):</label>
+    <!-- type="text" para permitir vírgula e pontos de milhar -->
+    <input id="valor" type="text" inputmode="decimal" placeholder="Ex: 160,26 ou 1.234,56">
+
+    <label>Data:</label>
+    <input id="data" type="date">
+
+    <div style="margin-top:8px;">
+      <button id="btnAdicionar">Adicionar Transação</button>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="filtros">
+    <select id="mesFiltro">
+      <option value="">Todos os meses</option>
+      <option value="01">Janeiro</option>
+      <option value="02">Fevereiro</option>
+      <option value="03">Março</option>
+      <option value="04">Abril</option>
+      <option value="05">Maio</option>
+      <option value="06">Junho</option>
+      <option value="07">Julho</option>
+      <option value="08">Agosto</option>
+      <option value="09">Setembro</option>
+      <option value="10">Outubro</option>
+      <option value="11">Novembro</option>
+      <option value="12">Dezembro</option>
+    </select>
+  </div>
+
+  <!-- Resumo -->
+  <div class="resumo">
+    <p><strong>Total de Receitas:</strong> <span id="totalReceitas">R$ 0,00</span></p>
+    <p><strong>Total de Despesas:</strong> <span id="totalDespesas">R$ 0,00</span></p>
+    <p><strong>Saldo Total:</strong> <span id="saldo">R$ 0,00</span></p>
+  </div>
+
+  <!-- Tabela -->
+  <table>
+    <thead>
+      <tr>
+        <th>Descrição</th>
+        <th>Tipo</th>
+        <th>Categoria</th>
+        <th>Valor</th>
+        <th>Data</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody id="listaTransacoes"></tbody>
+  </table>
+
+  <!-- Gráfico -->
+  <canvas id="grafico"></canvas>
+
+  <script>
+    // --- Dados iniciais ---
+    let transacoes = JSON.parse(localStorage.getItem("transacoes")) || [];
+    let grafico;
+
+    // --- Função de parsing tolerante ---
+    function parseCurrencyBRtoNumber(str) {
+      if (!str && str !== 0) return NaN;
+      // limpar espaços
+      let s = String(str).trim();
+      // se estiver vazio depois do trim
+      if (s === "") return NaN;
+
+      // remover tudo que não seja dígito, ponto ou vírgula
+      s = s.replace(/[^0-9.,-]/g, "");
+
+      // lidar com números negativos
+      const negative = s.includes('-') && !s.includes('−');
+
+      // Se usar formato de milhar com pontos e vírgula decimal (ex: 1.234,56)
+      // removemos pontos (se houver vírgula) e trocamos vírgula por ponto
+      if (s.indexOf(',') > -1) {
+        // remove pontos de milhar
+        s = s.replace(/\./g, '');
+        // troca vírgula decimal por ponto
+        s = s.replace(/,/g, '.');
+      } else {
+        // não tem vírgula: pode ter pontos como separador decimal (160.26) ou pontos de milhar errados
+        // mantemos pontos (serão interpretados pelo parseFloat)
+      }
+
+      // remove duplicidade de pontos (caso usuário tenha digitado errado)
+      const parts = s.split('.');
+      if (parts.length > 2) {
+        // junta tudo até a penúltima como parte inteira
+        const decimal = parts.pop();
+        const inteiro = parts.join('');
+        s = inteiro + '.' + decimal;
+      }
+
+      // remove sinais extras
+      s = s.replace(/[^0-9.\-]/g, '');
+
+      if (s === '' || s === '.' || s === '-' ) return NaN;
+
+      let n = parseFloat(s);
+      if (negative && !isNaN(n)) n = -Math.abs(n);
+      return isNaN(n) ? NaN : n;
+    }
+
+    // --- Atualizar tabela e resumo ---
+    function atualizarTabela() {
+      const tbody = document.getElementById("listaTransacoes");
+      const saldoSpan = document.getElementById("saldo");
+      const totalReceitasSpan = document.getElementById("totalReceitas");
+      const totalDespesasSpan = document.getElementById("totalDespesas");
+      const mesFiltro = document.getElementById("mesFiltro").value;
+
+      tbody.innerHTML = "";
+      let totalReceitas = 0;
+      let totalDespesas = 0;
+
+      const filtradas = transacoes.filter(t => {
+        if (!mesFiltro) return true;
+        return t.data && t.data.split("-")[1] === mesFiltro;
+      });
+
+      filtradas.forEach(t => {
+        const linha = document.createElement("tr");
+        linha.innerHTML = `
+          <td>${escapeHtml(t.descricao)}</td>
+          <td>${t.tipo}</td>
+          <td>${escapeHtml(t.categoria || '')}</td>
+          <td>R$ ${t.valor.toFixed(2)}</td>
+          <td>${t.data || ''}</td>
+          <td class="acoes"><button data-id="${t.id}" class="btn-excluir">Excluir</button></td>
+        `;
+        tbody.appendChild(linha);
+
+        if (t.tipo === "receita") totalReceitas += t.valor;
+        else totalDespesas += t.valor;
+      });
+
+      const saldo = totalReceitas - totalDespesas;
+
+      totalReceitasSpan.textContent = `R$ ${totalReceitas.toFixed(2)}`;
+      totalDespesasSpan.textContent = `R$ ${totalDespesas.toFixed(2)}`;
+      saldoSpan.textContent = `R$ ${saldo.toFixed(2)}`;
+      saldoSpan.className = saldo >= 0 ? "positivo" : "negativo";
+
+      // attach excluir handlers
+      document.querySelectorAll('.btn-excluir').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = Number(e.currentTarget.getAttribute('data-id'));
+          excluirTransacao(id);
+        });
+      });
+
+      atualizarGrafico(totalReceitas, totalDespesas);
+    }
+
+    // --- Escape simples para evitar injeção na tabela ---
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return String(text).replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // --- Adicionar transação (com parsing robusto) ---
+    function adicionarTransacao() {
+      const descricao = document.getElementById("descricao").value.trim();
+      const tipo = document.getElementById("tipo").value;
+      const categoria = document.getElementById("categoria").value.trim();
+      const rawValor = document.getElementById("valor").value;
+      const data = document.getElementById("data").value;
+
+      console.log("Tentando adicionar:", { descricao, tipo, categoria, rawValor, data });
+
+      const valor = parseCurrencyBRtoNumber(rawValor);
+      console.log("Valor convertido:", valor);
+
+      if (!descricao || isNaN(valor) || !data) {
+        let msg = "Preencha corretamente os campos:\n";
+        if (!descricao) msg += "- Descrição\n";
+        if (isNaN(valor)) msg += "- Valor (use 160,26 ou 1.234,56)\n";
+        if (!data) msg += "- Data\n";
+        alert(msg);
+        return;
+      }
+
+      const nova = { id: Date.now(), descricao, tipo, categoria, valor, data };
+      transacoes.push(nova);
+      localStorage.setItem("transacoes", JSON.stringify(transacoes));
+
+      // limpa campos
+      document.getElementById("descricao").value = "";
+      document.getElementById("categoria").value = "";
+      document.getElementById("valor").value = "";
+      document.getElementById("data").value = "";
+
+      atualizarTabela();
+    }
+
+    // --- Excluir transação ---
+    function excluirTransacao(id) {
+      transacoes = transacoes.filter(t => t.id !== id);
+      localStorage.setItem("transacoes", JSON.stringify(transacoes));
+      atualizarTabela();
+    }
+
+    // --- Gráfico ---
+    function atualizarGrafico(receitas, despesas) {
+      const ctx = document.getElementById("grafico").getContext("2d");
+      if (grafico) grafico.destroy();
+      grafico = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: ["Receitas", "Despesas"],
+          datasets: [{ data: [receitas, despesas], backgroundColor: ["#2ecc71", "#e74c3c"] }]
+        },
+        options: { plugins: { legend: { position: "bottom" }, title: { display: true, text: "Resumo Financeiro" } } }
+      });
+    }
+
+    // --- Eventos UI ---
+    document.getElementById("btnAdicionar").addEventListener("click", adicionarTransacao);
+    document.getElementById("mesFiltro").addEventListener("change", atualizarTabela);
+
+    // permitir só números, ponto e vírgula no campo valor (visual assist)
+    document.getElementById("valor").addEventListener("input", (e) => {
+      e.target.value = e.target.value.replace(/[^0-9.,\-]/g, '');
+    });
+
+    // --- Inicializa ---
+    atualizarTabela();
+
+    // --- Para ajudar debug (mostre no console se algo der errado) ---
+    console.log("App inicializado. Transações carregadas:", transacoes);
+  </script>
+</body>
+</html>
